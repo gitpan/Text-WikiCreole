@@ -1,12 +1,12 @@
 package Text::WikiCreole;
 require Exporter;
 @ISA = (Exporter);
-@EXPORT = qw(creole_parse creole_plugin creole_link creole_tag);
+@EXPORT = qw(creole_parse creole_plugin creole_link creole_tag creole_img);
 use vars qw($VERSION);
 use strict;
 use warnings;
 
-our $VERSION = "0.01";
+our $VERSION = "0.02";
 
 sub  strip_head_eq { # strip lead/trail white/= from headings
   $_[0] =~ s/^\s*=*\s*//o;
@@ -34,7 +34,7 @@ my @all_inline = (@inline, 'plain', 'any'); # including plain text
 
 # blocks
 my @blocks = ('h1', 'h2', 'h3', 'hr', 'nowiki', 'h4', 'h5', 'h6',
-              'ul', 'ol', 'table', 'p', 'ip', 'dl', 'blank');
+              'ul', 'ol', 'table', 'p', 'ip', 'dl', 'plug', 'blank');
 
 # handy - used several times in %chunks
 my $eol = '(?:\n|$)'; # end of line (or string)
@@ -42,8 +42,10 @@ my $bol = '(?:^|\n)'; # beginning of line (or string)
 
 # user-supplied plugin parser function
 my $plugin_function;
-# user-supplied link parser function
+# user-supplied link URL parser function
 my $link_function;
+# user-supplied image URL parser function
+my $img_function;
 
 # initialize once
 my $initialized = 0;
@@ -179,7 +181,7 @@ my %chunks = (
   nowiki => {
     curpat => '(?=\{\{\{ *\n)',
     fwpat => '\n(?=\{\{\{ *\n)',
-    stops => '\n\}\}\} *\n',
+    stops => "\n\}\}\} *$eol",
     hint => ['{'],
     filter => sub {
       substr($_[0], 0, 3, '');
@@ -367,7 +369,14 @@ my %chunks = (
   imgsrc => {
     curpat => '(?=[^\|])',
     stops => '(?=\|)',
-    filter => sub { $_[0] =~ s/^\s*//o; $_[0] =~ s/\s*$//o; return $_[0]; },
+    filter => sub { 
+      $_[0] =~ s/^\s*//o; 
+      $_[0] =~ s/\s*$//o; 
+      if($img_function) {
+        $_[0] = &$img_function($_[0]);
+      }
+      return $_[0]; 
+    },
     open => 'src="', close => '"',
   },
   strong => {
@@ -561,14 +570,9 @@ sub init {
 
   # build an array of "plain content" characters by subtracting @specialchars
   # from ascii printable (ascii 32 to 126)
-  for my $i (32 .. 126) {
-    my $special = 0;
-    for (@specialchars) {
-      if(chr($i) eq $_) {
-        $special++;
-      }
-    }
-    push(@plainchars, chr $i) unless $special;
+  my %is_special = map({$_ => 1} @specialchars);
+  for (32 .. 126) {
+    push(@plainchars, chr($_)) unless $is_special{chr($_)};
   }
 
   # precompile a bunch of regexes 
@@ -604,6 +608,10 @@ sub creole_link {
   $link_function = $_[0];
 }
 
+sub creole_img {
+  $img_function = $_[0];
+}
+
 sub creole_tag {
   my ($tag, $type, $text) = @_;
   if(! $tag) {
@@ -632,7 +640,7 @@ Text::WikiCreole - Convert Wiki Creole 1.0 markup to XHTML
 
 =head1 VERSION
 
-Version 0.01
+Version 0.02
 
 =head1 DESCRIPTION
 
@@ -689,17 +697,27 @@ reads Creole 1.0 markup and returns XHTML.
     }
     creole_link \&mylink;
 
+=head2 creole_img
+
+    Same purpose as creole_link, but for image URLs.
+
+    sub myimg {
+      return "http://my.comain/$_[0]";
+      return $_[0];
+    }
+    creole_img \&myimg;
+
 =head2 creole_tag
 
     You may wish to customize the opening and/or closing tags
     for the various bits of Creole markup.  For example, to
     assign a CSS class to list items:
  
-    creole_tags("li", "open", "<li class=myclass>");
+    creole_tag("li", "open", "<li class=myclass>");
 
     Or to see all current tags:
 
-    print creole_tags();
+    print creole_tag();
 
     The tags that may be of interest are:
 

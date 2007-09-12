@@ -9,6 +9,11 @@ several extensions, such as plugins, superscript, subscript, underline,
 definition lists, indented paragraphs, plugins, etc.
 
 CHANGES:
+    Version 0.02: 
+       Fixed bug parsing plugin blocks
+       Fixed bug with nowiki blocks at end of file
+       Added creole_img for custom image URLs
+                  
     Version 0.01: Initial release.
 
 INSTALLATION
