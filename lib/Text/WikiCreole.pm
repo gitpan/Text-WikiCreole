@@ -1,633 +1,363 @@
 package Text::WikiCreole;
 require Exporter;
 @ISA = (Exporter);
-@EXPORT = qw(creole_parse creole_plugin creole_link creole_tag creole_img);
-use vars qw($VERSION);
+@EXPORT = qw(%creole_tags creole_parse creole_plugin creole_link creole_extend);
+use vars qw(%creole_tags $VERSION);
 use strict;
 use warnings;
 
-our $VERSION = "0.02";
+our $VERSION = "0.01";
 
-sub  strip_head_eq { # strip lead/trail white/= from headings
-  $_[0] =~ s/^\s*=*\s*//o;
-  $_[0] =~ s/\s*=*\s*$//o;
-  return $_[0];
-}
-
-sub strip_list {  # strip list markup trickery
-  $_[0] =~ s/(?:`*| *)[\*\#]/`/o; 
-  $_[0] =~ s/\n(?:`*| *)[\*\#]/\n`/gso; 
-  return $_[0]; 
-}
-
-# characters that may indicate inline wiki markup
-my @specialchars = ('^', '\\', '*', '/', '_', ',', '{', '[', 
-                    '<', '~', '|', "\n", '#', ':', ';', '(', '-', '.');
-# plain characters - auto-generated below (ascii printable minus @specialchars)
-my @plainchars; 
-
-# non-plain text inline widgets
-my @inline = ('strong', 'em', 'br',  'esc', 'img', 'link', 'ilink',
-              'inowiki', 'sub', 'sup', 'mono', 'u', 'plug', 'tm', 
-              'reg', 'copy', 'ndash', 'ellipsis');
-my @all_inline = (@inline, 'plain', 'any'); # including plain text
-
-# blocks
-my @blocks = ('h1', 'h2', 'h3', 'hr', 'nowiki', 'h4', 'h5', 'h6',
-              'ul', 'ol', 'table', 'p', 'ip', 'dl', 'plug', 'blank');
-
-# handy - used several times in %chunks
-my $eol = '(?:\n|$)'; # end of line (or string)
-my $bol = '(?:^|\n)'; # beginning of line (or string)
-
-# user-supplied plugin parser function
-my $plugin_function;
-# user-supplied link URL parser function
-my $link_function;
-# user-supplied image URL parser function
-my $img_function;
-
-# initialize once
-my $initialized = 0;
-
-my %chunks = (
-  top => {
-     contains => \@blocks,
-  },
-  blank => {
-    curpat => "(?= *$eol)",
-    fwpat => "(?=(?:^|\n) *$eol)",
-    stops => '(?=\S)',
-    hint => ["\n"],
-    filter => sub { return ""; }, # whitespace into the bit bucket
-    open => "", close => "",
-  },
-  p => {
-    curpat => '(?=.)',
-    stops => ['blank', 'ip', 'h', 'hr', 'nowiki', 'ul', 'ol', 'dl', 'table'],
-    hint => \@plainchars,
-    contains => \@all_inline,
-    filter => sub { chomp $_[0]; return $_[0]; },
-    open => "<p>", close => "</p>\n\n",
-  },
-  ip => {
-    curpat => '(?=:)',
-    fwpat => '\n(?=:)',
-    stops => ['blank', 'h', 'hr', 'nowiki', 'ul', 'ol', 'dl', 'table'],
-    hint => [':'],
-    contains => ['p', 'ip'],
-    filter => sub { 
-      $_[0] =~ s/://o; 
-      $_[0] =~ s/\n:/\n/so; 
-      return $_[0]; 
-    },
-    open => "<div style=\"margin-left: 2em\">", close => "</div>\n",
-  },
-  dl => {
-    curpat => '(?=;)',
-    fwpat => '\n(?=;)',
-    stops => ['blank', 'h', 'hr', 'nowiki', 'ul', 'ol', 'table'],
-    hint => [';'],
-    contains => ['dt', 'dd'],
-    open => "<dl>\n", close => "</dl>\n",
-  },
-  dt => {
-    curpat => '(?=;)',
-    fwpat => '\n(?=;)',
-    stops => '(?=:|\n)',
-    hint => [';'],
-    contains => \@all_inline,
-    filter => sub { $_[0] =~ s/^;\s*//o; return $_[0]; },
-    open => "  <dt>", close => "</dt>\n",
-  },
-  dd => {
-    curpat => '(?=\n|:)',
-    fwpat => '(?:\n|:)',
-    stops => '(?=:)|\n(?=;)',
-    hint => [':', "\n"],
-    contains => \@all_inline,
-    filter => sub { 
-      $_[0] =~ s/(?:\n|:)\s*//so; 
-      $_[0] =~ s/\s*$//so;
-      return $_[0]; 
-    },
-    open => "    <dd>", close => "</dd>\n",
-  },
-  table => {
-    curpat => '(?= *\|.)',
-    fwpat => '\n(?= *\|.)',
-    stops => '\n(?= *[^\|])',
-    contains => ['tr'],
-    hint => ['|', ' '],
-    open => "<table>\n", close => "</table>\n\n",
-  },
-  tr => {
-    curpat => '(?= *\|)',
-    stops => '\n',
-    contains => ['td', 'th'],
-    hint => ['|', ' '],
-    filter => sub { $_[0] =~ s/^ *//o; $_[0] =~ s/\| *$//o; return $_[0]; },
-    open => "    <tr>\n", close => "    </tr>\n",
-  },
-  td => {
-    curpat => '(?=\|[^=])',
-    # this gnarly regex fixes ambiguous '|' for links/imgs/nowiki in tables
-    stops => '[^~](?=\|(?!(?:[^\[]*\]\])|(?:[^\{]*\}\})))',
-    contains => \@all_inline,
-    hint => ['|'],
-    filter => sub {$_[0] =~ s/^ *\| *//o; $_[0] =~ s/\s*$//so; return $_[0]; },
-    open => "        <td>", close => "</td>\n",
-  },
-  th => {
-    curpat => '(?=\|=)',
-    # this gnarly regex fixes ambiguous '|' for links/imgs/nowiki in tables
-    stops => '[^~](?=\|(?!(?:[^\[]*\]\])|(?:[^\{]*\}\})))',
-    contains => \@all_inline,
-    hint => ['|'],
-    filter => sub {$_[0] =~ s/^ *\|= *//o; $_[0] =~ s/\s*$//so; return $_[0]; },
-    open => "        <th>", close => "</th>\n",
-  },
-  ul => {
-    curpat => '(?=(?:`| *)\*[^\*])',
-    fwpat => '(?=\n(?:`| *)\*[^\*])',
-    stops => ['blank', 'ip', 'h', 'nowiki', 'li', 'table', 'hr', 'dl'],
-    contains => ['ul', 'ol', 'li'],
-    hint => ['*', ' '],
-    filter => \&strip_list,
-    open => "<ul>\n", close => "</ul>\n",
-  },
-  ol => {
-    curpat => '(?=(?:`| *)\#[^\#])',
-    fwpat => '(?=\n(?:`| *)\#[^\#])',
-    stops => ['blank', 'ip', 'h', 'nowiki', 'li', 'table', 'hr', 'dl'],
-    contains => ['ul', 'ol', 'li'],
-    hint => ['#', ' '],
-    filter => \&strip_list,
-    open => "<ol>\n", close => "</ol>\n",
-  },
-  li => {
-    curpat => '(?=`[^\*\#])',
-    fwpat => '\n(?=`[^\*\#])',
-    stops => '\n(?=`)',
-    hint => ['`'],
-    filter => sub { 
-      $_[0] =~ s/` *//o;
-      chomp $_[0];
-      return $_[0];
-    },
-    contains => \@all_inline,
-    open => "    <li>", close => "</li>\n",
-  },
-  nowiki => {
-    curpat => '(?=\{\{\{ *\n)',
-    fwpat => '\n(?=\{\{\{ *\n)',
-    stops => "\n\}\}\} *$eol",
-    hint => ['{'],
-    filter => sub {
-      substr($_[0], 0, 3, '');
-      $_[0] =~ s/\}\}\}\s*$//o;
-      $_[0] =~ s/&/&amp;/go;
-      $_[0] =~ s/</&lt;/go;
-      $_[0] =~ s/>/&gt;/go;
-      return $_[0];
-    },
-    open => "<pre>", close => "</pre>\n\n",
-  },
-  hr => {
-    curpat => "(?= *-{4,} *$eol)",
-    fwpat => "\n(?= *-{4,} *$eol)",
-    hint => ['-', ' '],
-    stops => $eol,
-    open => "<hr />\n\n", close => "",
-    filter => sub { return ""; } # ----- into the bit bucket
-  },
-  h => { curpat => '(?=(?:^|\n) *=)' }, # matches any heading
-  h1 => {
-    curpat => '(?= *=[^=])',
-    hint => ['=', ' '], 
-    stops => '\n',
-    contains => \@all_inline,
-    open => "<h1>", close => "</h1>\n\n",
-    filter => \&strip_head_eq,
-  },
-  h2 => {
-    curpat => '(?= *={2}[^=])',
-    hint => ['=', ' '], 
-    stops => '\n',
-    contains => \@all_inline,
-    open => "<h2>", close => "</h2>\n\n",
-    filter => \&strip_head_eq,
-  },
-  h3 => {
-    curpat => '(?= *={3}[^=])',
-    hint => ['=', ' '], 
-    stops => '\n',
-    contains => \@all_inline,
-    open => "<h3>", close => "</h3>\n\n",
-    filter => \&strip_head_eq,
-  },
-  h4 => {
-    curpat => '(?= *={4}[^=])',
-    hint => ['=', ' '], 
-    stops => '\n',
-    contains => \@all_inline,
-    open => "<h4>", close => "</h4>\n\n",
-    filter => \&strip_head_eq,
-  },
-  h5 => {
-    curpat => '(?= *={5}[^=])',
-    hint => ['=', ' '], 
-    stops => '\n',
-    contains => \@all_inline,
-    open => "<h5>", close => "</h5>\n\n",
-    filter => \&strip_head_eq,
-  },
-  h6 => {
-    curpat => '(?= *={6,})',
-    hint => ['=', ' '], 
-    stops => '\n',
-    contains => \@all_inline,
-    open => "<h6>", close => "</h6>\n\n",
-    filter => \&strip_head_eq,
-  },
-  plain => {
-    curpat => '(?=[^\*\/_\,\^\\\\{\[\<\|])',
-    stops => \@inline,
-    hint => \@plainchars,
-    open => '', close => ''
-  },
-  any => { # catch-all
-    curpat => '(?=.)',
-    stops => \@inline,
-    open => '', close => ''
-  },
-  br => {
-    curpat => '(?=\\\\\\\\)',
-    stops => '\\\\\\\\',
-    hint => ['\\'],
-    filter => sub { return ''; },
-    open => '<br />', close => '',
-  },
-  esc => {
-    curpat => '(?=~[\S])',
-    stops => '~.',
-    hint => ['~'],
-    filter => sub { substr($_[0], 0, 1, ''); return $_[0]; },
-    open => '', close => '',
-  },
-  inowiki => {
-    curpat => '(?=\{{3}.*?\}*\}{3})',
-    stops => '.*?\}*\}{3}',
-    hint => ['{'],
-    filter => sub {
-      substr($_[0], 0, 3, ''); 
-      $_[0] =~ s/\}{3}$//o;
-      $_[0] =~ s/&/&amp;/go;
-      $_[0] =~ s/</&lt;/go;
-      $_[0] =~ s/>/&gt;/go;
-      return $_[0];
-    },
-    open => "<tt>", close => "</tt>",
-  },
-  plug => {
-    curpat => '(?=\<{2}.*?\>*\>{2})',
-    stops => '.*?\>*\>{2}',
-    hint => ['<'],
-    filter => sub {
-      substr($_[0], 0, 2, ''); 
-      $_[0] =~ s/\>{2}$//o;
-      if($plugin_function) {
-        return &$plugin_function($_[0]);
-      }
-      return "<<$_[0]>>";
-    },
-    open => "", close => "",
-  },
-  ilink => {
-    curpat => '(?=(?:https?|ftp):\/\/)',
-    stops => '(?=[[:punct:]]?(?:\s|$))',
-    hint => ['h', 'f'],
-    filter => sub { 
-      $_[0] =~ s/^\s*//o;
-      $_[0] =~ s/\s*$//o;
-      return "href=\"$_[0]\">$_[0]"; },
-    open => "<a ", close=> "</a>",
-  },
-  link => {
-    curpat => '(?=\[\[[^\n]+?\]\])',
-    stops => '\]\]',
-    hint => ['['],
-    contains => ['href', 'atext'],
-    filter => sub {
-      substr($_[0], 0, 2, ''); 
-      substr($_[0], -2, 2, ''); 
-      $_[0] .= "|$_[0]" unless $_[0] =~ tr/|/|/; # text = url unless given
-      return $_[0];
-    },
-    open => "<a ", close => "</a>",
-  },
-  href => {
-    curpat => '(?=[^\|])',
-    stops => '(?=\|)',
-    filter => sub { 
-      $_[0] =~ s/^\s*//o; 
-      $_[0] =~ s/\s*$//o; 
-      if($link_function) {
-        $_[0] = &$link_function($_[0]);
-      }
-      return $_[0]; 
-    },
-    open => 'href="', close => '">',
-  },
-  atext => {
-    curpat => '(?=\|)',
-    stops => '\n',
-    hint => ['|'],
-    contains => \@all_inline,
-    filter => sub { $_[0] =~ s/^\|\s*//o; $_[0] =~ s/\s*$//o; return $_[0]; },
-    open => '', close => '',
-  },
-  img => {
-    curpat => '(?=\{\{[^\{][^\n]*?\}\})',
-    stops => '\}\}',
-    hint => ['{'],
-    contains => ['imgsrc', 'imgalt'],
-    filter => sub {
-      substr($_[0], 0, 2, ''); 
-      $_[0] =~ s/\}\}$//o;
-      return $_[0];
-    },
-    open => "<img ", close => " />",
-  },
-  imgalt => {
-    curpat => '(?=\|)',
-    stops => '\n',
-    hint => ['|'],
-    filter => sub { $_[0] =~ s/^\|\s*//o; $_[0] =~ s/\s*$//o; return $_[0]; },
-    open => ' alt="', close => '"',
-  },
-  imgsrc => {
-    curpat => '(?=[^\|])',
-    stops => '(?=\|)',
-    filter => sub { 
-      $_[0] =~ s/^\s*//o; 
-      $_[0] =~ s/\s*$//o; 
-      if($img_function) {
-        $_[0] = &$img_function($_[0]);
-      }
-      return $_[0]; 
-    },
-    open => 'src="', close => '"',
-  },
-  strong => {
-    curpat => '(?=\*\*)',
-    stops => '\*\*.*?\*\*',
-    hint => ['*'],
-    contains => \@all_inline,
-    filter => sub {
-      substr($_[0], 0, 2, ''); 
-      $_[0] =~ s/\*\*$//o;
-      return $_[0];
-    },
-    open => "<strong>", close => "</strong>",
-  },
-  em => {
-    curpat => '(?=\/\/)',
-    stops => '\/\/.*?\/\/',
-    hint => ['/'],
-    contains => \@all_inline,
-    filter => sub {
-      substr($_[0], 0, 2, ''); 
-      $_[0] =~ s/\/\/$//o;
-      return $_[0];
-    },
-    open => "<em>", close => "</em>",
-  },
-  mono => {
-    curpat => '(?=\#\#)',
-    stops => '\#\#.*?\#\#',
-    hint => ['#'],
-    contains => \@all_inline,
-    filter => sub {
-      substr($_[0], 0, 2, ''); 
-      $_[0] =~ s/\#\#$//o;
-      return $_[0];
-    },
-    open => "<tt>", close => "</tt>",
-  },
-  sub => {
-    curpat => '(?=,,)',
-    stops => ',,.*?,,',
-    hint => [','],
-    contains => \@all_inline,
-    filter => sub {
-      substr($_[0], 0, 2, ''); 
-      $_[0] =~ s/\,\,$//o;
-      return $_[0];
-    },
-    open => "<sub>", close => "</sub>",
-  },
-  sup => {
-    curpat => '(?=\^\^)',
-    stops => '\^\^.*?\^\^',
-    hint => ['^'],
-    contains => \@all_inline,
-    filter => sub {
-      substr($_[0], 0, 2, ''); 
-      $_[0] =~ s/\^\^$//o;
-      return $_[0];
-    },
-    open => "<sup>", close => "</sup>",
-  },
-  u => {
-    curpat => '(?=__)',
-    stops => '__.*?__',
-    hint => ['_'],
-    contains => \@all_inline,
-    filter => sub {
-      substr($_[0], 0, 2, ''); 
-      $_[0] =~ s/__$//o;
-      return $_[0];
-    },
-    open => "<u>", close => "</u>",
-  },
-  tm => {
-    curpat => '(?=\(TM\))',
-    stops => '\(TM\)',
-    hint => ['('],
-    filter => sub { return "&trade;"; },
-    open => "", close => "",
-  },
-  reg => {
-    curpat => '(?=\(R\))',
-    stops => '\(R\)',
-    hint => ['('],
-    filter => sub { return "&reg;"; },
-    open => "", close => "",
-  },
-  copy => {
-    curpat => '(?=\(C\))',
-    stops => '\(C\)',
-    hint => ['('],
-    filter => sub { return "&copy;"; },
-    open => "", close => "",
-  },
-  ndash => {
-    curpat => '(?=--)',
-    stops => '--',
-    hint => ['-'],
-    filter => sub { return "&ndash;"; },
-    open => "", close => "",
-  },
-  ellipsis => {
-    curpat => '(?=\.\.\.)',
-    stops => '\.\.\.',
-    hint => ['.'],
-    filter => sub { return "&hellip;"; },
-    open => "", close => "",
-  },
+# order matters for performance.  for inline, first should
+# be 'plain', second 'esc', last 'any'.  the rest in order of most common.  
+my @strict_inline = ( # @inline set to this by default
+  'plain', 'esc', 'link', 'nlink', 'strong', 'br', 'inowiki', 'img', 'em', 
+  'plug', 'any'
+);
+my @extended_inline = ( # optionally appended to @inline
+  'sup', 'sub', 'u', 'mono'
+);
+my @strict_blocks = ( # @blocks set to this by default
+  'p', 'h1', 'h2', 'h3', 'ul', 'ol', 'hr', 'table', 'h4', 'h5', 
+  'h6', 'nowiki', 'plug'
+);
+my @extended_blocks = ( # optionally appended to @blocks
+  'ip', 'dl'
 );
 
-  
-sub parse; # predeclared because it's recursive
-      
+# default to strict.  switch to extended with creole_extend(1)
+my @inline = @strict_inline;
+my @blocks = @strict_blocks;
+
+BEGIN {
+  %creole_tags = (
+    hr => { open => "<hr />\n", close => "" },
+    br => { open => "<br />", close => "" },
+    li => { open => "<li>", close => "</li>\n" },
+    ol => { open => "<ol>\n", close => "</ol>\n" },
+    ul => { open => "<ul>\n", close => "</ul>\n" },
+    table => { open => "<table>\n", close => "</table>\n" },
+    tr => { open => "<tr>\n", close => "</tr>\n" },
+    td => { open => "<td>", close => "</td>\n" },
+    th => { open => "<th>", close => "</th>\n" },
+    strong => { open => "<strong>", close => "</strong>" },
+    em => { open => "<em>", close => "</em>" },
+    inowiki => { open => "<tt>", close => "</tt>" },
+    sup => { open => "<sup>", close => "</sup>" },
+    sub => { open => "<sub>", close => "</sub>" },
+    u => { open => "<u>", close => "</u>" },
+    p => { open => "<p>", close => "</p>\n" },
+    ip => { open => "<div style=\"margin-left: 2em\">", close => "</div>\n" },
+    dl => { open => "<dl>\n", close => "</dl>\n" },
+    dt => { open => "<dt>", close => "</dt>\n" },
+    dd => { open => "<dd>", close => "</dd>\n" },
+    nowiki => { open => "<pre>\n", close => "</pre>\n" },
+    mono => { open => "<tt>", close => "</tt>" },
+    h1 => { open => "<h1>", close => "</h1>\n" },
+    h2 => { open => "<h2>", close => "</h2>\n" },
+    h3 => { open => "<h3>", close => "</h3>\n" },
+    h4 => { open => "<h4>", close => "</h4>\n" },
+    h5 => { open => "<h5>", close => "</h5>\n" },
+    h6 => { open => "<h6>", close => "</h6>\n" },
+    a => { open => "<a href=", close => "</a>" },
+    link => { open => "", close => "" },
+    nlink => { open => "", close => "" },
+    img => { open => "<img ", close => " />" },
+    esc => { open => "", close => "" },
+    plain => { open => "", close => "" },
+    any => { open => "", close => "" },
+    url => { open => "", close => "" },
+    top => { open => "", close => "" },
+    plug => { open => "", close => "" },
+  );
+}
+
+# a bunch of handy patterns
+my $s = qr/\ */;                    # optional space
+my $bl = qr/$s\n/s;                 # blank to end of line
+my $bls = qr/(?:$bl)*/s;            # optional consecutive blank lines
+my $nbl = qr/[^\n]*?\S.*?\n/s;      # non-blank line
+my $l = qr/.*?\n/s;                 # rest of current line
+my $head = qr/$s=$s[^=]+$s=*$bl/;   # heading
+my $hr = qr/$s-{4,}$bl/s;           # horizontal line
+my $now = qr/\{{3}$bl$l*\}{3}$bl/s; # nowiki block
+my $plug = qr/$s\<\<.*?\>\>/s;      # plugin block
+my $tbl = qr/$s\|/s;                # table 
+my $ino = qr/\{{3}/s;               # nowiki inline
+my $list = qr/$s[\*\#][^\*\#]/;     # list
+my $ip = qr/:$s\S/;                 # indented paragraph
+my $dl = qr/;$s\S/;                 # definition list
+my $str = qr/\*\*[^\*].*?\*\*/s;    # strong
+my $esc = qr/~/;                    # escape character
+my $ne = qr/(?<!$esc)/;             # no escape char preceding
+sub eatwhite {                      # eat consecutive blank lines
+  $_[0] =~ s/$bls$//s;
+  return $_[0];
+}  
+
+# shorthand for the plain block below. 
+my $in_ext = qr/(?!\*\*|\\\\|\/\/|\{\{|\[\[|\<\<|\,\,|\^\^|__|\#\#|$esc|https?:\/\/|ftp:\/\/)/s;
+my $in_str = qr/(?!\*\*|\\\\|\/\/|\{\{|\[\[|\<\<|$esc|https?:\/\/|ftp:\/\/)/s;
+my $in = $in_str; # default to strict
+
+my %grammar = (
+    top => { # special block, which matches all and launches the others
+      match => qr/^(.*)/s,
+      blocks => \@blocks,
+    },
+    p => { # paragraph
+      match_ext => qr/^(?!$ip|$dl)$bls((?:(?!$head|$list|$hr|$now|$plug|$tbl|$ip|$dl)$nbl)+)$bls/s,
+      # keep the next 2 identical
+      match_str => qr/^$bls((?:(?!$head|$list|$hr|$now|$plug|$tbl)$nbl)+)$bls/s,
+      match =>     qr/^$bls((?:(?!$head|$list|$hr|$now|$plug|$tbl)$nbl)+)$bls/s,
+      filter => \&eatwhite,
+      blocks => \@inline,
+    },
+    ip => { # indented paragraph
+      match => qr/^:((?:(?!$head|$list|$hr|$now|$plug|$tbl|$dl)$nbl)+)$bls/s,
+      filter => sub { $_[0] =~ s/^://mg; return $_[0]; },
+      blocks => ['p', 'ip'],
+    },
+    dl => { # definition list
+      match => qr/^(;(?:(?!$list|$now|$head|$hr|$plug|$tbl)$nbl)+)$bls/s,
+      blocks => ['dt', 'dd', 'any'],
+    },
+    dt => { # definition title
+      match => qr/^;$s((?:.(?!(?<!$esc):))*.?)/s,
+      filter => sub { $_[0] =~ s/\s$//s; return $_[0]; },
+      blocks => \@inline,
+    },
+    dd => { # definition list
+      match => qr/^:$s((?:.(?!(?<!$esc)[;:]))*.?)/s,
+      filter => sub { $_[0] =~ s/\s$//s; return $_[0]; },
+      blocks => \@inline,
+    },
+    h1 => {
+        match => qr/^$s=$s([^=].*?)$s=*$bl$bls/s,
+        blocks => \@inline,
+    },
+    h2 => {
+        match => qr/^$s={2}$s([^=].*?)$s=*$bl$bls/s,
+        blocks => \@inline,
+    },
+    h3 => {
+        match => qr/^$s={3}$s([^=].*?)$s=*$bl$bls/s,
+        blocks => \@inline,
+    },
+    h4 => {
+        match => qr/^$s={4}$s([^=].*?)$s=*$bl$bls/s,
+        blocks => \@inline,
+    },
+    h5 => {
+        match => qr/^$s={5}$s([^=].*?)$s=*$bl$bls/s,
+        blocks => \@inline,
+    },
+    h6 => {
+        match => qr/^$s={6}$s([^=].*?)$s=*$bl$bls/s,
+        blocks => \@inline,
+    },
+    ul => {
+        match => qr/^`?$s(\*[^\*]$l(?:(?!$head|$now|`|$hr|$tbl)$nbl)*)$bls/s,
+        filter => sub { 
+          $_[0] =~ s/^$s[\*\#]([^\*\#])/\`$1/mg; 
+          $_[0] =~ s/^$s[\*\#]//mg;
+          return $_[0];
+        },
+        blocks => ['ul', 'ol', 'li'],
+    },
+    ol => {
+        match => qr/^`?$s(\#[^\#]$l(?:(?!$head|$now|`|$hr|$tbl)$nbl)*)$bls/s,
+        filter => sub { 
+          $_[0] =~ s/^$s[\*\#]([^\*\#])/\`$1/mg; 
+          $_[0] =~ s/^$s[\*\#]//mg;
+          return $_[0];
+        },
+        blocks => ['ul', 'ol', 'li'],
+    },
+    table => {
+        match => qr/^($s\|.*$bl)+$bls/s,
+        blocks => ['tr'],
+    },
+    tr => {
+        match => qr/^$s(\|.*?)\|?$bl/s,
+        blocks => ['th', 'td'],
+    },
+    td => {
+        match => qr/^\|$s([^\|]*)/,
+        blocks => \@inline,
+        filter => sub { $_[0] =~ s/$s$//; return $_[0]; }
+    },
+    th => {
+        match => qr/^\|=$s([^\|]*)/,
+        blocks => \@inline,
+        filter => sub { $_[0] =~ s/$s$//; return $_[0]; }
+    },
+    plug => { 
+        match => qr/^$s\<{2}(.*?\>*)$ne\>{2}(?:$bl$bls)?/s,
+    },        
+    nowiki => {
+        match => qr/^\{{3}$bl((?:$l)*?\})\}\}$bl$bls/s,
+        filter => sub { 
+          $_[0] =~ s/\}$//s; 
+          $_[0] =~ s/\&/\&amp;/gs;
+          $_[0] =~ s/\</\&lt;/gs;
+          $_[0] =~ s/\>/\&gt;/gs;
+          return $_[0]; 
+        }
+    },
+    hr => {
+        match => qr/^$s(-)-{3,}$bl$bls/s,
+        filter => sub { $_[0] =~ s/-//; return $_[0]; }
+    },
+    # inline stuff below here
+    em => {
+        match => qr/^\/\/([^\/].*?)(?:$ne\/\/|$)/s,
+        blocks => \@inline,
+    },
+    strong => {
+        match => qr/^\*\*([^\*].*?)(?:$ne\*\*|$)/s,
+        blocks => \@inline,
+    }, 
+    sup => {
+        match => qr/^\^\^([^\^].*?)(?:$ne\^\^|$)/s,
+        blocks => \@inline,
+    }, 
+    sub => {
+        match => qr/^\,\,([^\,].*?)(?:$ne\,\,|$)/s,
+        blocks => \@inline,
+    }, 
+    u => {
+        match => qr/^__([^_].*?)(?:${ne}__|$)/s,
+        blocks => \@inline,
+    }, 
+    mono => {
+        match => qr/^\#\#([^\#].*?)(?:${ne}\#\#|$)/s,
+        blocks => \@inline,
+    }, 
+    li => {
+        match => qr/^\`$s($l(?:[^\`\*\#]$l)*)/s,
+        blocks => \@inline,
+        filter => \&eatwhite
+    },
+    br => {
+        match => qr/^(\\)\\/,
+        filter => sub { $_[0] =~ s/.//; return $_[0]; }
+    },
+    inowiki => {
+        match => qr/^\{\{(\{.*?\}*)\}{3}/s,
+        filter => sub { 
+          $_[0] =~ s/^\{//; 
+          $_[0] =~ s/\&/\&amp;/gs;
+          $_[0] =~ s/\</\&lt;/gs;
+          $_[0] =~ s/\>/\&gt;/gs;
+          return $_[0]; }
+    },
+    img => { 
+        match => qr/^\{\{([^\{].*?)$ne\}\}/s,
+        filter => sub {
+          $_[0] =~ m/([^\|]*)\|?(.*)/; 
+          my $i = $1; my $a = $2;
+          $a = "" unless $a; 
+          $i =~ s/$s(.*?)$s$/$1/;
+          return qq|src="$i" alt="$a"|;
+        }
+    },
+    link => { # link in [[ double brackets ]]
+        match => qr/^\[\[([^\[].*?)$ne\]\]/s,
+        blocks => ['url', 'plain', 'img', 'em', 'strong', 'any'],
+        filter => sub {
+          $_[0] =~ m/([^\|]*)\|?(.*)/; 
+          my $l = $1; my $t = $2;
+          $t = $l unless $t; 
+          $l =~ s/(?:^$s|$s$)//g;
+          $t =~ s/(?:^$s|$s$)//g;
+          return "$creole_tags{a}{open}\"$l\">$t$creole_tags{a}{close}";
+        }
+    },
+    nlink => { # naked URLs
+        match => qr/^((?:http:|https:|ftp:)\/\/[^\s]*)/s,
+        filter => sub {
+          if($_[0] =~ m/(.*?)([\(\,\.\?\!\:\;\"\'\)])$/s) {
+            return "$creole_tags{a}{open}\"$1\">$1$creole_tags{a}{close}$2";
+          } else {
+            return "$creole_tags{a}{open}\"$_[0]\">$_[0]$creole_tags{a}{close}";
+          }
+        }
+    },
+    # prevent markup in links until after <a href=...>
+    url => { match => qr/^(\<[^\<\>]*\>)/ }, 
+    # match the escape character not followed by whitespace
+    esc => { match => qr/^$esc([^\s])/ },
+    # match all text up to the next inline markup
+    plain => { match => qr/^($in(?:.$in)*.?)/s },
+    # last resort.  matches any 1 character.
+    any => { match => qr/^(.)/, },
+
+);
+
+sub gerror {
+  print STDERR "Grammar error: $_[0]\n";
+}
+
 sub parse {
-  my ($tref, $chunk) = @_;
-  my ($html, $ch);
-  my $pos = 0; my $lpos = 0;
-  while(1) {
-    if($ch) { # if we already know what kind of chunk this is
-      if ($$tref =~ /$chunks{$ch}{delim}/g) { # find where it stops...
-        $pos = pos($$tref);                   #     another chunk
-      } else {
-        $pos = length $$tref;                 #     end of string
-      }
+  my ($text, $block) = @_; $block = "top" unless $block;
+  my $html;
 
-      $html .= $chunks{$ch}{open};            # print the open tag
-     
-      my $t = substr($$tref, $lpos, $pos - $lpos); # grab the chunk
-      if($chunks{$ch}{filter}) {   # filter it, if applicable
-        $t = &{$chunks{$ch}{filter}}($t);
-      }
-      $lpos = $pos;  # remember where this chunk ends (where next begins)
-      if($t && $chunks{$ch}{contains}) {  # if it contains other chunks...
-        $html .= parse(\$t, $ch);         #    recurse.
-      } else {
-        $html .= $t;                      #    otherwise, print it
-      }
-      $html .= $chunks{$ch}{close};       # print the close tag
-    }
+  # sanity checking
+  if(! $grammar{$block}{match}) { return ""; }
+  return "" unless $$text =~ /$grammar{$block}{match}(.*)/s;
+  if(! ($1 && length($1) > 0)) { return ""; }
 
-    if($pos && $pos == length($$tref)) { # we've eaten the whole string
-      last;
-    } else {                             # more string to come
-      $ch = undef;
-      my $fc = substr($$tref, $pos, 1);     # get a hint about the next chunk
-      foreach (@{$chunks{$chunk}{hints}{$fc}}) {
-#        print "trying $_ for -$fc- on -" . substr($$tref, $pos, 2) . "-\n";
-        if($$tref =~ $chunks{$_}{curpatcmp}) { # hint helped id the chunk
-           $ch = $_; last;  
-        }
-      }
-      unless($ch) {                           #  hint didn't help
-        foreach (@{$chunks{$chunk}{contains}}) { # check all possible chunks
-#          print "trying $_ on -" . substr($$tref, $pos, 2) . "-\n";
-          if ($$tref =~ $chunks{$_}{curpatcmp}) { # found one
-            $ch = $_; last;
-          } 
-        }
-        last unless $ch;  # no idea what this is.  ditch the rest and give up.
-      }
-    }
+  my $chunk = $1; $$text = $2; 
+  if(ref $grammar{$block}{filter}) {
+    $chunk = &{$grammar{$block}{filter}}($chunk);
   }
-  return $html;  # voila!
-}
-
-# compile a regex that matches any of the patterns that interrupt the
-# current chunk.
-sub delim {
-  if(ref $chunks{$_[0]}{stops}) {
-    my $regex; 
-    foreach(@{$chunks{$_[0]}{stops}}) {
-      if($chunks{$_}{fwpat}) {
-        $regex .= "$chunks{$_}{fwpat}|";
-      } else {
-        $regex .= "$chunks{$_}{curpat}|";
+  $html .= $creole_tags{$block}{open};
+  if(ref $grammar{$block}{blocks}) {
+    while(my $l = $chunk) {
+      for (@{$grammar{$block}{blocks}}) {
+        if(my $z = parse(\$chunk, $_)) {
+          $html .= $z;
+          last;
+        }
+      }
+      if($l eq $chunk) { 
+        gerror "Block '$block' did not reduce text: -$l-"; 
+        last;
       }
     }
-    chop $regex;
-    return qr/$regex/s;
   } else {
-    return qr/$chunks{$_[0]}{stops}/s;
+    $html .= $chunk;
   }
+  return($html . $creole_tags{$block}{close});
 }
 
-# one-time optimization of the grammar - speeds the parser up a ton
-sub init {
-  return if $initialized;
-
-  $initialized = 1;
-
-  # build an array of "plain content" characters by subtracting @specialchars
-  # from ascii printable (ascii 32 to 126)
-  my %is_special = map({$_ => 1} @specialchars);
-  for (32 .. 126) {
-    push(@plainchars, chr($_)) unless $is_special{chr($_)};
-  }
-
-  # precompile a bunch of regexes 
-  foreach my $c (keys %chunks) {
-    if($chunks{$c}{curpat}) { 
-      $chunks{$c}{curpatcmp} = qr/\G$chunks{$c}{curpat}/s;
-    }
-    if($chunks{$c}{stops}) { 
-      $chunks{$c}{delim} = delim $c;
-    }
-    if($chunks{$c}{contains}) { # store hints about each chunk to speed id
-      foreach my $ct (@{$chunks{$c}{contains}}) {
-        foreach (@{$chunks{$ct}{hint}}) {
-          push @{$chunks{$c}{hints}{$_}}, $ct;
-        }
-      }
-    }
-  }
-}
-
+# exported parse function.  copy input, then parse, since parse modifies the source
 sub creole_parse {
-  my $text = $_[0]; 
-  init;
-  my $html = parse(\$text, "top");
-  return $html;
+  my ($text) = @_;
+  return parse \$text;
 }
 
+# exported function to register a plugin to digest << plugins >> 
 sub creole_plugin {
-  $plugin_function = $_[0];
+  $grammar{plug}{filter} = $_[0];
 }
 
+# exported function to register a filter to customize internal wiki links
 sub creole_link {
-  $link_function = $_[0];
+  $grammar{url}{filter} = $_[0];
 }
 
-sub creole_img {
-  $img_function = $_[0];
-}
-
-sub creole_tag {
-  my ($tag, $type, $text) = @_;
-  if(! $tag) {
-    foreach (sort keys %chunks) {
-      my $o = $chunks{$_}{open};
-      my $c = $chunks{$_}{close};
-      next unless $o && $o =~ /</so;
-      $o =~ s/\n/\\n/gso if $o; $o = "" unless $o;
-      $c =~ s/\n/\\n/gso if $c; $c = "" unless $c;
-      print "$_: open($o) close($c)\n";
-    }
-  } else {
-    return unless ($type eq "open" || $type eq "close");
-    return unless $chunks{$tag};
-    $chunks{$tag}{$type} = $text ? $text : "";
-  }
+# exported function switches from default strict syntax to extended syntax
+sub creole_extend {
+  # add the inline extensions *before* the last item, which is
+  # the catchall 'any' 
+  splice @inline, @inline - 1, 0, @extended_inline;
+  splice @blocks, @blocks, 0, @extended_blocks;
+  ## a hack follows.  Not the least bit elegant...
+  $grammar{p}{match} = $grammar{p}{match_ext};
+  $in = ${in_ext};
+  $grammar{plain}{match} = qr/^($in(?:.$in)*.?)/s; # recompile after changing $in
 }
 
 1;
@@ -640,7 +370,7 @@ Text::WikiCreole - Convert Wiki Creole 1.0 markup to XHTML
 
 =head1 VERSION
 
-Version 0.02
+Version 0.01
 
 =head1 DESCRIPTION
 
@@ -651,6 +381,7 @@ reads Creole 1.0 markup and returns XHTML.
 =head1 SYNOPSIS
 
  use Text::WikiCreole;
+ creole_extend;            # use optional extensions to Creole 1.0
  creole_plugin \&myplugin; # register custom plugin parser
 
  my $html = creole_parse($creole_text);
@@ -662,6 +393,14 @@ reads Creole 1.0 markup and returns XHTML.
 
     Self-explanatory.  Takes a Creole markup string argument and 
     returns HTML. 
+
+=head2 creole_extend
+
+    By default, Text::WikiCreole implements strict Creole 1.0,
+    summarized in STRICT MARKUP below.
+
+    creole_extend() enables support for the additional markup 
+    described in EXTENDED MARKUP below.
 
 =head2 creole_plugin
 
@@ -678,65 +417,50 @@ reads Creole 1.0 markup and returns XHTML.
     }
     creole_plugin \&uppercase_plugin;
 
-    If you do not register a plugin function, plugin markup will be left
-    as is, including the surrounding << >>.
-
 =head2 creole_link
 
     You may wish to customize [[ links ]], such as to prefix a hostname,
     port, etc.
 
     Write a function, similar to the plugin function, which receives the
-    URL part of the link (with leading and trailing whitespace stripped) 
-    as $_[0] and returns the customized link.  For example, to prepend 
-    "http://my.domain/" to pagename:
+    <a href="pagename"> part of the link as $_[0] and returns the 
+    customized link.  For example, to prepend "http://my.domain/" to
+    pagename:
 
     sub mylink {
-      return "http://my.comain/$_[0]";
+      $_[0] =~ s%href=\"%href=\"http://my.comain/%;
       return $_[0];
     }
     creole_link \&mylink;
 
-=head2 creole_img
+=head1 VARIABLES
 
-    Same purpose as creole_link, but for image URLs.
-
-    sub myimg {
-      return "http://my.comain/$_[0]";
-      return $_[0];
-    }
-    creole_img \&myimg;
-
-=head2 creole_tag
+=head2 %creole_tags
 
     You may wish to customize the opening and/or closing tags
     for the various bits of Creole markup.  For example, to
     assign a CSS class to list items:
  
-    creole_tag("li", "open", "<li class=myclass>");
+    $creole_tags{li}{open} = "<li class=myclass>";
 
-    Or to see all current tags:
+    Or to see the current open tag for indented paragraphs:
 
-    print creole_tag();
+    print "$creole_tags{ip}{open}\n";
 
     The tags that may be of interest are:
 
-    br          dd          dl
-    dt          em          h1
-    h2          h3          h4
-    h5          h6          hr 
-    ilink       img         inowiki
-    ip          li          link
-    mono        nowiki      ol
-    p           strong      sub
-    sup         table       td
-    th          tr          u
-    ul
+    hr          br          li
+    ol          ul          table
+    tr          th          td
+    strong      em          inowiki (inline nowiki syntax)
+    nowiki      sup         sub
+    u           p           ip (indented paragraphs)
+    dl          dt          mono (monospace)
+    dd          h1          h2
+    h3          h4          h5
+    h6          a           img
 
-    Those should be self-explanatory, except for inowiki (inline nowiki),
-    ilink (bare links, e.g. http://www.cpan.org), and ip (indented paragraph).
-
-=head1 OFFICIAL MARKUP
+=head1 STRICT MARKUP
  
     Here is a summary of the official Creole 1.0 markup 
     elements.  See http://www.wikicreole.org for the full
@@ -782,17 +506,17 @@ reads Creole 1.0 markup and returns XHTML.
     ~** not bold **    ->    ** not bold **
     tilde: ~~          ->    tilde: ~
 
+    Plugins:
+    << plugin >>       ->    whatever you want
+
     Paragraphs are separated by other blocks and blank lines.  
     Inline markup can usually be combined, overlapped, etc.  List
     items and plugin text can span lines.
 
 =head1 EXTENDED MARKUP
 
-    In addition to OFFICIAL MARKUP, Text::WikiCreole also supports
+    In addition to STRICT MARKUP, Text::WikiCreole optionally supports
     the following markup:
-
-    Plugins:
-    << plugin >>        ->    whatever you want (see creole_plugin above)
 
     Inline:
     ## monospace ##     ->    <tt> monospace </tt>

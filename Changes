@@ -1,9 +1,5 @@
 Revision history for Text-WikiCreole
-0.02    9/12/2007
-    Fixed bug parsing plugin blocks
-    Fixed bug with nowiki blocks at end of file
-    Added creole_img for custom image URLs
 
-0.01    9/11/2007
-    Initial Release
+0.01    Date/time
+        First version, released on an unsuspecting world.
 
