@@ -1,15 +1,23 @@
 Text-WikiCreole
 
-The README is used to introduce the module and provide instructions on
-how to install the module, any machine dependencies it may have (for
-example C compilers and installed libraries) and any other information
-that should be provided before the module is installed.
+Text::WikiCreole implements the Wiki Creole markup language, version
+1.0, as described at http://www.wikicreole.org.  It reads Creole 1.0
+markup and returns XHTML.
 
-A README file is required for CPAN modules since CPAN extracts the README
-file from a module distribution so that people browsing the archive
-can use it get an idea of the modules uses. It is usually a good idea
-to provide version information here so that people can decide whether
-fixes for the module are worth downloading.
+In addition to the official Creole 1.0 markup elements, it also supports
+several extensions, such as plugins, superscript, subscript, underline, 
+definition lists, indented paragraphs, plugins, etc.
+
+CHANGES:
+    Version 0.03:
+       Added <<< alternate plugin >>> syntax
+
+    Version 0.02: 
+       Fixed bug parsing plugin blocks
+       Fixed bug with nowiki blocks at end of file
+       Added creole_img for custom image URLs
+                  
+    Version 0.01: Initial release.
 
 INSTALLATION
 
