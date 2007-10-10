@@ -6,7 +6,7 @@ use vars qw($VERSION);
 use strict;
 use warnings;
 
-our $VERSION = "0.03";
+our $VERSION = "0.04";
 
 sub  strip_head_eq { # strip lead/trail white/= from headings
   $_[0] =~ s/^\s*=*\s*//o;
@@ -608,6 +608,7 @@ sub init {
 }
 
 sub creole_parse {
+  return unless defined $_[0] && length $_[0] > 0;
   my $text = $_[0]; 
   init;
   my $html = parse(\$text, "top");
@@ -615,14 +616,17 @@ sub creole_parse {
 }
 
 sub creole_plugin {
+  return unless defined $_[0];
   $plugin_function = $_[0];
 }
 
 sub creole_link {
+  return unless defined $_[0];
   $link_function = $_[0];
 }
 
 sub creole_img {
+  return unless defined $_[0];
   $img_function = $_[0];
 }
 

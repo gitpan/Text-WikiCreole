@@ -1,4 +1,8 @@
 Revision history for Text-WikiCreole
+
+0.04 10/10/2007
+    Fixed a bug with creole_parse and undefined input
+
 0.03    9/21/2007
     Added <<< alternate plugin >>> syntax, since Perl can be hard to embed in
     << 2-bracket >> plugins
