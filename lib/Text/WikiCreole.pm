@@ -1,12 +1,12 @@
 package Text::WikiCreole;
 require Exporter;
 @ISA = (Exporter);
-@EXPORT = qw(creole_parse creole_plugin creole_link creole_tag creole_img);
+@EXPORT = qw(creole_parse creole_plugin creole_link creole_tag creole_img creole_customlinks creole_customimgs);
 use vars qw($VERSION);
 use strict;
 use warnings;
 
-our $VERSION = "0.04";
+our $VERSION = "0.05";
 
 sub  strip_head_eq { # strip lead/trail white/= from headings
   $_[0] =~ s/^\s*=*\s*//o;
@@ -358,7 +358,11 @@ my %chunks = (
     stops => '\n',
     hint => ['|'],
     contains => \@all_inline,
-    filter => sub { $_[0] =~ s/^\|\s*//o; $_[0] =~ s/\s*$//o; return $_[0]; },
+    filter => sub { 
+      $_[0] =~ s/^\|\s*//o; 
+      $_[0] =~ s/\s*$//o; 
+      return $_[0]; 
+    },
     open => '', close => '',
   },
   img => {
@@ -625,6 +629,32 @@ sub creole_link {
   $link_function = $_[0];
 }
 
+sub creole_customlinks {
+  $chunks{href}{open} = "";
+  $chunks{href}{close} = "";
+  $chunks{link}{open} = "";
+  $chunks{link}{close} = "";
+  delete $chunks{link}{contains};
+  $chunks{link}{filter} = sub { 
+    if($link_function) {
+      $_[0] = &$link_function($_[0]);
+    }
+    return $_[0];
+  }
+}
+
+sub creole_customimgs {
+  $chunks{img}{open} = "";
+  $chunks{img}{close} = "";
+  delete $chunks{img}{contains};
+  $chunks{img}{filter} = sub { 
+    if($img_function) {
+      $_[0] = &$img_function($_[0]);
+    }
+    return $_[0];
+  }
+}
+
 sub creole_img {
   return unless defined $_[0];
   $img_function = $_[0];
@@ -716,6 +746,16 @@ reads Creole 1.0 markup and returns XHTML.
     }
     creole_link \&mylink;
 
+=head2 creole_customlinks
+
+    If you want complete control over links, rather than just modifying
+    the URL, register your link markup function with creole_link() as above
+    and then call creole_customlinks().  Now your function will receive the 
+    entire link markup chunk, such as [[ some_wiki_page | page description ]] 
+    and must return HTML.
+  
+    This has no effect on "bare" link markup, such as http://cpan.org.
+
 =head2 creole_img
 
     Same purpose as creole_link, but for image URLs.
@@ -725,6 +765,10 @@ reads Creole 1.0 markup and returns XHTML.
       return $_[0];
     }
     creole_img \&myimg;
+
+=head2 creole_customimgs
+
+    Similar to creole_customlinks, but for images.
 
 =head2 creole_tag
 

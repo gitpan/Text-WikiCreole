@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:                Text-WikiCreole
-version:             0.04
+version:             0.05
 abstract:            Convert Wiki Creole 1.0 markup to XHTML
 license:             ~
 generated_by:        ExtUtils::MakeMaker version 6.36

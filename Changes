@@ -1,5 +1,8 @@
 Revision history for Text-WikiCreole
 
+0.05    10/11/2007
+    Added creole_customlinks() and creole_customimgs() 
+
 0.04 10/10/2007
     Fixed a bug with creole_parse and undefined input
 

@@ -9,6 +9,9 @@ several extensions, such as plugins, superscript, subscript, underline,
 definition lists, indented paragraphs, plugins, etc.
 
 CHANGES:
+    Version 0.05:
+       Added creole_customlinks() and creole_customimgs()
+
     Version 0.04:
        Fixed a bug with creole_parse and undefined input
 
