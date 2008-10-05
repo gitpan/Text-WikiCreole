@@ -19,3 +19,7 @@ t/plugin.t
 t/specialchars.html
 t/specialchars.markup
 t/specialchars.t
+t/amp.html
+t/amp.markup
+t/amp.t
+

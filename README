@@ -9,6 +9,12 @@ several extensions, such as plugins, superscript, subscript, underline,
 definition lists, indented paragraphs, plugins, etc.
 
 CHANGES:
+    Version 0.06:
+       Bug fix: & not converted to &amp; where appropriate
+       Feature addition: creole_barelink() and creole_custombarelinks() 
+          functions for customized handling of http://google.com style links
+          courtesy of Bernd Zeimetz
+
     Version 0.05:
        Added creole_customlinks() and creole_customimgs()
 

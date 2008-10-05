@@ -1,12 +1,13 @@
 package Text::WikiCreole;
 require Exporter;
 @ISA = (Exporter);
-@EXPORT = qw(creole_parse creole_plugin creole_link creole_tag creole_img creole_customlinks creole_customimgs);
+@EXPORT = qw(creole_parse creole_plugin creole_tag creole_img creole_customimgs
+             creole_link creole_barelink creole_customlinks creole_custombarelinks);
 use vars qw($VERSION);
 use strict;
 use warnings;
 
-our $VERSION = "0.05";
+our $VERSION = "0.06";
 
 sub  strip_head_eq { # strip lead/trail white/= from headings
   $_[0] =~ s/^\s*=*\s*//o;
@@ -29,7 +30,7 @@ my @plainchars;
 # non-plain text inline widgets
 my @inline = ('strong', 'em', 'br',  'esc', 'img', 'link', 'ilink',
               'inowiki', 'sub', 'sup', 'mono', 'u', 'plug', 'plug2', 'tm', 
-              'reg', 'copy', 'ndash', 'ellipsis');
+              'reg', 'copy', 'ndash', 'ellipsis', 'amp');
 my @all_inline = (@inline, 'plain', 'any'); # including plain text
 
 # blocks
@@ -44,6 +45,8 @@ my $bol = '(?:^|\n)'; # beginning of line (or string)
 my $plugin_function;
 # user-supplied link URL parser function
 my $link_function;
+# user-supplied bare link parser function
+my $barelink_function;
 # user-supplied image URL parser function
 my $img_function;
 
@@ -321,9 +324,12 @@ my %chunks = (
     curpat => '(?=(?:https?|ftp):\/\/)',
     stops => '(?=[[:punct:]]?(?:\s|$))',
     hint => ['h', 'f'],
-    filter => sub { 
+    filter => sub {
       $_[0] =~ s/^\s*//o;
       $_[0] =~ s/\s*$//o;
+      if($barelink_function) {
+        $_[0] = &$barelink_function($_[0]);
+      }
       return "href=\"$_[0]\">$_[0]"; },
     open => "<a ", close=> "</a>",
   },
@@ -468,6 +474,13 @@ my %chunks = (
       return $_[0];
     },
     open => "<u>", close => "</u>",
+  },
+  amp => {
+    curpat => '(?=\&(?!\w+\;))',
+    stops => '.',
+    hint => ['&'],
+    filter => sub { return "&amp;"; },
+    open => "", close => "",
   },
   tm => {
     curpat => '(?=\(TM\))',
@@ -643,6 +656,22 @@ sub creole_customlinks {
   }
 }
 
+sub creole_barelink {
+  return unless defined $_[0];
+  $barelink_function = $_[0];
+}
+
+sub creole_custombarelinks {
+  $chunks{ilink}{open} = "";
+  $chunks{ilink}{close} = "";
+  $chunks{ilink}{filter} = sub {
+    if($barelink_function) {
+      $_[0] = &$barelink_function($_[0]);
+    }
+    return $_[0];
+  }
+}
+
 sub creole_customimgs {
   $chunks{img}{open} = "";
   $chunks{img}{close} = "";
@@ -688,7 +717,7 @@ Text::WikiCreole - Convert Wiki Creole 1.0 markup to XHTML
 
 =head1 VERSION
 
-Version 0.02
+Version 0.06
 
 =head1 DESCRIPTION
 
@@ -741,8 +770,7 @@ reads Creole 1.0 markup and returns XHTML.
     "http://my.domain/" to pagename:
 
     sub mylink {
-      return "http://my.comain/$_[0]";
-      return $_[0];
+      return "http://my.domain/$_[0]";
     }
     creole_link \&mylink;
 
@@ -756,13 +784,25 @@ reads Creole 1.0 markup and returns XHTML.
   
     This has no effect on "bare" link markup, such as http://cpan.org.
 
+=head2 creole_barelink
+
+    Same purpose as creole_link, but for "bare" link markup.
+
+    sub mybarelink {
+      return "$_[0].html";
+    }
+    creole_barelink \&mybarelink;
+
+=head2 creole_custombarelinks
+
+    Same purpose as creole_customlinks, but for "bare" link markup.
+
 =head2 creole_img
 
     Same purpose as creole_link, but for image URLs.
 
     sub myimg {
       return "http://my.comain/$_[0]";
-      return $_[0];
     }
     creole_img \&myimg;
 

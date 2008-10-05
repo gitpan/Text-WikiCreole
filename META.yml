@@ -1,14 +1,11 @@
---- #YAML:1.0
-name:                Text-WikiCreole
-version:             0.05
-abstract:            Convert Wiki Creole 1.0 markup to XHTML
-license:             ~
-generated_by:        ExtUtils::MakeMaker version 6.36
-distribution_type:   module
-requires:     
+# http://module-build.sourceforge.net/META-spec.html
+#XXXXXXX This is a prototype!!!  It will change in the future!!! XXXXX#
+name:         Text-WikiCreole
+version:      0.06
+version_from: lib/Text/WikiCreole.pm
+installdirs:  site
+requires:
     Test::More:                    0
-meta-spec:
-    url:     http://module-build.sourceforge.net/META-spec-v1.2.html
-    version: 1.2
-author:
-    - Jason Burnett <jason@jnj.org>
+
+distribution_type: module
+generated_by: ExtUtils::MakeMaker version 6.30_01
