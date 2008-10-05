@@ -9,6 +9,9 @@ several extensions, such as plugins, superscript, subscript, underline,
 definition lists, indented paragraphs, plugins, etc.
 
 CHANGES:
+    Version 0.07:
+       Bug fix: Italics around links rendered incorrectly.
+
     Version 0.06:
        Bug fix: & not converted to &amp; where appropriate
        Feature addition: creole_barelink() and creole_custombarelinks() 

@@ -7,7 +7,7 @@ use vars qw($VERSION);
 use strict;
 use warnings;
 
-our $VERSION = "0.06";
+our $VERSION = "0.07";
 
 sub  strip_head_eq { # strip lead/trail white/= from headings
   $_[0] =~ s/^\s*=*\s*//o;
@@ -417,7 +417,7 @@ my %chunks = (
   },
   em => {
     curpat => '(?=\/\/)',
-    stops => '\/\/.*?\/\/',
+    stops => '\/\/.*?(?<!:)\/\/',
     hint => ['/'],
     contains => \@all_inline,
     filter => sub {
@@ -717,7 +717,7 @@ Text::WikiCreole - Convert Wiki Creole 1.0 markup to XHTML
 
 =head1 VERSION
 
-Version 0.06
+Version 0.07
 
 =head1 DESCRIPTION
 
